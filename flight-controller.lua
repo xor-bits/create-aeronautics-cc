@@ -38,8 +38,8 @@ local corr                         = {
   turn_right = false,
   boost = 0,
 }
-local pid_accumulators             = init_table(2, 0.0)
-local pid_prev_errors              = init_table(2, 0.0)
+local pid_accumulators             = init_table(3, 0.0)
+local pid_prev_errors              = init_table(3, 0.0)
 
 local target_bearing               = math.pi / 2.0
 local target_x_vel                 = 0
@@ -66,97 +66,6 @@ local mode                         = 7
 local inputs_len                   = mode
 local inputs                       = init_table(inputs_len, false)
 local prev_inputs                  = init_table(inputs_len, false)
-
-local function manual_mode()
-  if inputs[rotate_left] and not prev_inputs[rotate_left] then
-    target_bearing = target_bearing + 0.1
-  end
-  if inputs[rotate_right] and not prev_inputs[rotate_right] then
-    target_bearing = target_bearing - 0.1
-  end
-  if inputs[forward] and not prev_inputs[forward] then
-    target_z_vel = target_z_vel - 1
-  end
-  if inputs[backward] and not prev_inputs[backward] then
-    target_z_vel = target_z_vel + 1
-  end
-  if inputs[strafe_left] and not prev_inputs[strafe_left] then
-    target_x_vel = target_x_vel + 1
-  end
-  if inputs[strafe_right] and not prev_inputs[strafe_right] then
-    target_x_vel = target_x_vel - 1
-  end
-
-  local y_angle_0, y_angle_1 = find_angle(compass)
-  local target_y_angle_0     = math.cos(target_bearing)
-  local target_y_angle_1     = math.sin(target_bearing)
-  dot                        = y_angle_0 * target_y_angle_1 + y_angle_1 * target_y_angle_0
-  if dot > 1 then
-    corr.turn_right = true
-  elseif dot < -1 then
-    corr.turn_left = true
-  end
-end
-
-local function autopilot_mode()
-  if inputs[rotate_left] or inputs[strafe_left] then
-    corr.turn_left = true
-  end
-  if inputs[rotate_right] or inputs[strafe_right] then
-    corr.turn_right = true
-  end
-  if inputs[forward] and not prev_inputs[forward] then
-    autopilot_speed = autopilot_speed + 0.1
-  end
-  if inputs[backward] and not prev_inputs[backward] then
-    autopilot_speed = autopilot_speed - 0.1
-  end
-
-  local target_x_delta, target_z_delta = find_angle(compass)
-  target_x_vel = autopilot_speed * math.max(-5, math.min(5, -target_x_delta))
-  target_z_vel = autopilot_speed * math.max(-5, math.min(5, -target_z_delta))
-  if math.abs(target_z_delta) >= 15 then
-    corr.boost = target_z_delta
-  end
-
-  monitor.setCursorPos(1, 1)
-  monitor.write("speed:")
-  monitor.write(math.floor(autopilot_speed * 10) / 10.0)
-  monitor.write(" xd:")
-  monitor.write(-target_x_delta)
-  monitor.write(" zd:")
-  monitor.write(-target_z_delta)
-  monitor.setCursorPos(1, 2)
-  monitor.write("boost:")
-  monitor.write(corr.boost)
-end
-
-local function apply_corrections()
-  -- back  output is front left  propeller
-  -- left  output is front right propeller
-  -- front output is back  right propeller
-  -- right output is back  left  propeller
-  tilt_controller.setAnalogOutput("back", math.min(15, math.max(0, -corr.tilt_x + corr.tilt_z)))
-  tilt_controller.setAnalogOutput("left", math.min(15, math.max(0, corr.tilt_x + corr.tilt_z)))
-  tilt_controller.setAnalogOutput("front", math.min(15, math.max(0, corr.tilt_x - corr.tilt_z)))
-  tilt_controller.setAnalogOutput("right", math.min(15, math.max(0, -corr.tilt_x - corr.tilt_z)))
-
-  -- back  output turns right side forwards
-  -- right output turns right side backwards
-  -- front output turns left  side forwards
-  -- left  output turns left  side backwards
-  if corr.boost ~= 0 and not corr.turn_left and not corr.turn_right then
-    rotation_velocity_controller.setOutput("front", corr.boost > 0);
-    rotation_velocity_controller.setOutput("right", corr.boost < 0);
-    rotation_velocity_controller.setOutput("back", corr.boost > 0);
-    rotation_velocity_controller.setOutput("left", corr.boost < 0);
-  else
-    rotation_velocity_controller.setOutput("front", corr.turn_right);
-    rotation_velocity_controller.setOutput("right", corr.turn_right);
-    rotation_velocity_controller.setOutput("back", corr.turn_left);
-    rotation_velocity_controller.setOutput("left", corr.turn_left);
-  end
-end
 
 local pid_visualizer_x_e = 0.0
 local pid_visualizer_x_p = 0.0
@@ -264,6 +173,108 @@ local function visualize_pid()
     sum_x, sum_y,
     "S"
   )
+end
+
+local function manual_mode()
+  if inputs[rotate_left] and not prev_inputs[rotate_left] then
+    target_bearing = target_bearing + 0.1
+  end
+  if inputs[rotate_right] and not prev_inputs[rotate_right] then
+    target_bearing = target_bearing - 0.1
+  end
+  if inputs[forward] and not prev_inputs[forward] then
+    target_z_vel = target_z_vel - 1
+  end
+  if inputs[backward] and not prev_inputs[backward] then
+    target_z_vel = target_z_vel + 1
+  end
+  if inputs[strafe_left] and not prev_inputs[strafe_left] then
+    target_x_vel = target_x_vel + 1
+  end
+  if inputs[strafe_right] and not prev_inputs[strafe_right] then
+    target_x_vel = target_x_vel - 1
+  end
+
+  local y_angle_0, y_angle_1 = find_angle(compass)
+  local target_y_angle_0     = math.cos(target_bearing)
+  local target_y_angle_1     = math.sin(target_bearing)
+  dot                        = y_angle_0 * target_y_angle_1 + y_angle_1 * target_y_angle_0
+  local rotation_corr = pid_contoller {
+    i = 3,
+    error = dot,
+    k_p = 0.3,
+    k_d = 1.0,
+    k_i = 0.0,
+    acc_min = 0.0,
+    acc_max = 0.0,
+    delta_seconds = delta_seconds,
+  }
+
+  if rotation_corr >= 0.2 then
+    corr.turn_right = true
+  elseif dot <= 0.2 then
+    corr.turn_left = true
+  end
+end
+
+local function autopilot_mode()
+  if inputs[rotate_left] or inputs[strafe_left] then
+    corr.turn_left = true
+  end
+  if inputs[rotate_right] or inputs[strafe_right] then
+    corr.turn_right = true
+  end
+  if inputs[forward] and not prev_inputs[forward] then
+    autopilot_speed = autopilot_speed + 0.1
+  end
+  if inputs[backward] and not prev_inputs[backward] then
+    autopilot_speed = autopilot_speed - 0.1
+  end
+
+  local target_x_delta, target_z_delta = find_angle(compass)
+  target_x_vel = autopilot_speed * math.max(-5, math.min(5, -target_x_delta))
+  target_z_vel = autopilot_speed * math.max(-5, math.min(5, -target_z_delta))
+  if math.abs(target_z_delta) >= 15 then
+    corr.boost = target_z_delta
+  end
+
+  monitor.setCursorPos(1, 1)
+  monitor.write("speed:")
+  monitor.write(math.floor(autopilot_speed * 10) / 10.0)
+  monitor.write(" xd:")
+  monitor.write(-target_x_delta)
+  monitor.write(" zd:")
+  monitor.write(-target_z_delta)
+  monitor.setCursorPos(1, 2)
+  monitor.write("boost:")
+  monitor.write(corr.boost)
+end
+
+local function apply_corrections()
+  -- back  output is front left  propeller
+  -- left  output is front right propeller
+  -- front output is back  right propeller
+  -- right output is back  left  propeller
+  tilt_controller.setAnalogOutput("back", math.min(15, math.max(0, -corr.tilt_x + corr.tilt_z)))
+  tilt_controller.setAnalogOutput("left", math.min(15, math.max(0, corr.tilt_x + corr.tilt_z)))
+  tilt_controller.setAnalogOutput("front", math.min(15, math.max(0, corr.tilt_x - corr.tilt_z)))
+  tilt_controller.setAnalogOutput("right", math.min(15, math.max(0, -corr.tilt_x - corr.tilt_z)))
+
+  -- back  output turns right side forwards
+  -- right output turns right side backwards
+  -- front output turns left  side forwards
+  -- left  output turns left  side backwards
+  if corr.boost ~= 0 and not corr.turn_left and not corr.turn_right then
+    rotation_velocity_controller.setOutput("front", corr.boost > 0);
+    rotation_velocity_controller.setOutput("right", corr.boost < 0);
+    rotation_velocity_controller.setOutput("back", corr.boost > 0);
+    rotation_velocity_controller.setOutput("left", corr.boost < 0);
+  else
+    rotation_velocity_controller.setOutput("front", corr.turn_right);
+    rotation_velocity_controller.setOutput("right", corr.turn_right);
+    rotation_velocity_controller.setOutput("back", corr.turn_left);
+    rotation_velocity_controller.setOutput("left", corr.turn_left);
+  end
 end
 
 local prev_x_angle, prev_z_angle = find_angle(gimbal)
