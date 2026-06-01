@@ -56,32 +56,35 @@ local function ask_number(msg, min, max)
   end
 end
 
-local function read_saved_destinations()
-  local destinations = fs.open("destinations", "r")
-  if not destinations then return {} end
+local function unwrap(saved)
+  if not saved then saved = {} end
+  if not saved.destinations then saved.destinations = {} end
+  if not saved.pois then saved.pois = {} end
+  if not saved.compass then saved.compass = 0 end
+  return saved.destinations, saved.pois, saved.compass
+end
+
+local function wrap(destinations, pois, compass)
+  return {
+    destinations = destinations,
+    pois = pois,
+    compass = compass,
+  }
+end
+
+local function readData()
+  local destinations = fs.open("gps.data", "r")
+  if not destinations then return unwrap({}) end
   local str = destinations.readAll()
   destinations.close()
-  return textutils.unserialize(str)
+  return unwrap(textutils.unserialize(str))
 end
 
-local function write_saved_destinations(saved)
-  local destinations = fs.open("destinations", "w")
-  destinations.write(textutils.serialize(saved, { compact = true, allow_repetitions = true }))
+local function writeData(destinations, pois, compass)
+  local wrapped = wrap(destinations, pois, compass)
+  local destinations = fs.open("gps.data", "w")
+  destinations.write(textutils.serialize(wrapped, { compact = true, allow_repetitions = true }))
   destinations.close()
-end
-
-local function read_saved_pois()
-  local pois = fs.open("pois", "r")
-  if not pois then return {} end
-  local str = pois.readAll()
-  pois.close()
-  return textutils.unserialize(str)
-end
-
-local function write_saved_pois(saved)
-  local pois = fs.open("pois", "w")
-  pois.write(textutils.serialize(saved, { compact = true, allow_repetitions = true }))
-  pois.close()
 end
 
 local function cache_nav_tables(pois)
@@ -96,17 +99,19 @@ local function cache_nav_tables(pois)
   return cache
 end
 
-local saved = read_saved_destinations()
-local pois = read_saved_pois()
+local position = nil
+local target = nil
+local destinations, pois, compass = readData()
 local nav_tables = cache_nav_tables(pois)
+local nav_table_compass = find_peripheral("navigation_table", compass)
 
 local function pick_saved_destination()
-  if #saved == 0 then
+  if #destinations == 0 then
     return nil
   end
 
-  for i = 1, #saved do
-    local dst = saved[i]
+  for i = 1, #destinations do
+    local dst = destinations[i]
     io.stdout:write(string.format(
       "%d: %s (x:%d, y:%d)\n",
       i, dst.name, dst.x, dst.y
@@ -114,7 +119,7 @@ local function pick_saved_destination()
     io.stdout:flush()
   end
 
-  return ask_number("choice", 1, #saved)
+  return ask_number("choice", 1, #destinations)
 end
 
 local function pick_poi()
@@ -148,13 +153,14 @@ local function select_saved_destination()
     return
   end
 
-  local dst = saved[idx]
+  local dst = destinations[idx]
   local x = dst.x
   local y = dst.y
   local name = dst.name
 
   io.stdout:write(string.format("going to %d,%d (%s)\n", x, y, name))
   io.stdout:flush()
+  target = { x = x, y = y }
 end
 
 local function select_adhoc_destination()
@@ -176,14 +182,15 @@ local function select_adhoc_destination()
 
   io.stdout:write(string.format("going to %d,%d (%s)\n", x, y, name))
   io.stdout:flush()
+  target = { x = x, y = y }
 
   if save then
-    table.insert(saved, {
+    table.insert(destinations, {
       x = x,
       y = y,
       name = name,
     })
-    write_saved_destinations(saved)
+    writeData(destinations, pois, compass)
   end
 end
 
@@ -195,7 +202,7 @@ local function remove_saved_destination()
     return
   end
 
-  local dst = saved[idx]
+  local dst = destinations[idx]
   local x = dst.x
   local y = dst.y
   local name = dst.name
@@ -206,8 +213,8 @@ local function remove_saved_destination()
   local save = ask_bool("confirm?")
   if not save then return end
 
-  table.remove(saved, idx)
-  write_saved_destinations(saved)
+  table.remove(destinations, idx)
+  writeData(destinations, pois, compass)
 
   io.stdout:write(string.format("%s removed\n", name))
   io.stdout:flush()
@@ -225,7 +232,7 @@ local function create_poi()
 
   pois[id] = { x = x, y = y }
   nav_tables = cache_nav_tables(pois)
-  write_saved_pois(pois)
+  writeData(destinations, pois, compass)
 end
 
 local function remove_poi()
@@ -238,17 +245,47 @@ local function remove_poi()
 
   pois[id] = nil
   nav_tables = cache_nav_tables(pois)
-  write_saved_pois(pois)
+  writeData(destinations, pois, compass)
+end
+
+local function set_compass()
+  print("set compass nav table")
+
+  local id = ask_number("nav table id", 0, nil)
+  if not id then return end
+
+  compass = id
+  nav_table_compass = find_peripheral("navigation_table", compass)
+  writeData(destinations, pois, compass)
 end
 
 local function interactive()
   while true do
+    io.stdout:write("\n")
+    if position then
+      io.stdout:write(string.format(
+        "x:%d y:%d",
+        position.x, position.y
+      ))
+    end
+    if target and position then
+      local dx = target.x - position.x
+      local dy = target.y - position.y
+      io.stdout:write(string.format(
+        " dx:%d dy:%d dst:%d",
+        dx, dy, math.sqrt(dx * dx + dy * dy)
+      ))
+    end
+    if position then
+      io.stdout:write("\n")
+    end
     io.stdout:write("select operation:\n")
     io.stdout:write("1: select saved destination\n")
     io.stdout:write("2: select ad-hoc destination\n")
     io.stdout:write("3: remove saved destination\n")
     io.stdout:write("4: create POI\n")
-    io.stdout:write("5: remove POI\n> ")
+    io.stdout:write("5: remove POI\n")
+    io.stdout:write("6: set compass\n> ")
     io.stdout:flush()
 
     local handlers = {
@@ -257,6 +294,7 @@ local function interactive()
       ["3"] = remove_saved_destination,
       ["4"] = create_poi,
       ["5"] = remove_poi,
+      ["6"] = set_compass,
     }
 
     local handler = handlers[read()]
@@ -323,12 +361,15 @@ end
 local function background()
   while true do
     sleep(1)
-    if #nav_tables ~= 2 then
-      goto continue
-    end
 
-    local alpha = nav_tables[1].nav.getRelativeAngleRad() - math.pi / 2.0
-    local beta  = nav_tables[2].nav.getRelativeAngleRad() - math.pi / 2.0
+    if #nav_tables ~= 2 then goto continue end
+    if not nav_table_compass then goto continue end
+    if not nav_tables[1].nav then goto continue end
+    if not nav_tables[2].nav then goto continue end
+
+    local bearing = nav_table_compass.getRelativeAngleRad()
+    local alpha = nav_tables[1].nav.getRelativeAngleRad() - bearing
+    local beta  = nav_tables[2].nav.getRelativeAngleRad() - bearing
     local tan_alpha = math.tan(alpha)
     local tan_beta = math.tan(beta)
 
@@ -347,7 +388,11 @@ local function background()
     local mat_d = matrix_multiply(mat_c_inv, mat_a_transpose)
     local mat_e = matrix_multiply(mat_d, mat_b)
 
-    print(mat_e[1][1], mat_e[2][1])
+    -- print(mat_e[1][1], mat_e[2][1])
+    position = {
+      x = mat_e[1][1],
+      y = mat_e[2][1],
+    }
     ::continue::
   end
 end
