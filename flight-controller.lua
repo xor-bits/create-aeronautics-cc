@@ -78,27 +78,13 @@ local pid_visualizer_y_d = 0.0
 local function pid_contoller(config)
   local dt = math.max(0.1, config.delta_seconds)
 
-
-  if config.error - pid_prev_errors[config.i] == 0 then
-    print("error zero")
-  end
+  -- if config.error - pid_prev_errors[config.i] == 0 then
+  --   print("error zero")
+  -- end
 
   local proportional = config.k_p * config.error
   local integral = pid_accumulators[config.i]
   local derivative = config.k_d * (config.error - pid_prev_errors[config.i]) / dt
-
-  if proportional ~= proportional then
-    print("p nan")
-    proportional = 0.0
-  end
-  if integral ~= integral then
-    print("i nan")
-    integral = 0.0
-  end
-  if derivative ~= derivative then
-    print("d nan")
-    derivative = 0.0
-  end
 
   pid_accumulators[config.i] = clamp(
     config.acc_min,
@@ -319,14 +305,16 @@ while true do
   local target_x_angle = x_angle + target_x_vel
   local target_z_angle = z_angle + target_z_vel
 
+  x_dt_accum = x_dt_accum + delta_seconds
+  z_dt_accum = z_dt_accum + delta_seconds
   if target_x_angle - pid_prev_errors[1] ~= 0 or x_dt_accum >= 2.0 then
-    print("X pid with dt:", x_dt_accum, "dt:", delta_seconds)
+    -- print("X pid with dt:", x_dt_accum, "dt:", delta_seconds)
     corr.tilt_x = pid_contoller {
       i = 1,
       error = target_x_angle,
-      k_p = 0.15,
-      k_d = 0.7,
-      k_i = 0.001,
+      k_p = 0.12,
+      k_d = 1.2,
+      k_i = 0.01,
       acc_min = -4.0,
       acc_max = 4.0,
       visualize = "x",
@@ -334,27 +322,24 @@ while true do
       -- delta_seconds = delta_seconds,
     }
     x_dt_accum = 0.0
-  else
-    x_dt_accum = x_dt_accum + delta_seconds
   end
   if target_z_angle - pid_prev_errors[2] ~= 0 or z_dt_accum >= 2.0 then
     -- print("zangle:", z_angle, "prevzangle:", prev_z_angle)
-    print("Z pid with dt:", z_dt_accum, "dt:", delta_seconds)
+    -- print("Z pid with dt:", z_dt_accum, "dt:", delta_seconds)
     corr.tilt_z = pid_contoller {
       i = 2,
       error = target_z_angle,
       k_p = 0.2,
-      k_d = 1.0,
-      k_i = 0.001,
+      k_d = 2.0,
+      k_i = 0.03,
       acc_min = -15.0,
       acc_max = 15.0,
       visualize = "y",
       delta_seconds = z_dt_accum,
       -- delta_seconds = delta_seconds,
     }
+    print("I: x:", pid_visualizer_x_i, "y:", pid_visualizer_y_i)
     z_dt_accum = 0.0
-  else
-    z_dt_accum = z_dt_accum + delta_seconds
   end
 
   apply_corrections()
