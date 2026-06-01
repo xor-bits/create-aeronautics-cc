@@ -104,6 +104,7 @@ local target = nil
 local destinations, pois, compass = readData()
 local nav_tables = cache_nav_tables(pois)
 local nav_table_compass = find_peripheral("navigation_table", compass)
+local too_few_pois = true
 
 local function pick_saved_destination()
   if #destinations == 0 then
@@ -263,6 +264,9 @@ local function interactive()
   while true do
     io.stdout:write("\n")
     if position then
+      if too_few_pois then
+        io.stdout:write("(inaccurate) ")
+      end
       io.stdout:write(string.format(
         "x:%d y:%d",
         position.x, position.y
@@ -360,38 +364,44 @@ end
 
 local function background()
   while true do
-    sleep(1)
-
-    if #nav_tables ~= 2 then goto continue end
+    sleep(0.5)
     if not nav_table_compass then goto continue end
-    if not nav_tables[1].nav then goto continue end
-    if not nav_tables[2].nav then goto continue end
 
     local bearing = nav_table_compass.getRelativeAngleRad()
-    local alpha = nav_tables[1].nav.getRelativeAngleRad() - bearing
-    local beta  = nav_tables[2].nav.getRelativeAngleRad() - bearing
-    local tan_alpha = math.tan(alpha)
-    local tan_beta = math.tan(beta)
 
-    local mat_a = {
-      { 1, tan_alpha },
-      { 1, tan_beta },
-    }
-    local mat_b = {
-      { nav_tables[1].x + nav_tables[1].y * tan_alpha },
-      { nav_tables[2].x + nav_tables[2].y * tan_beta },
-    }
+    local datapoints = {}
+    for _,v in ipairs(nav_tables) do
+      local a = v.nav.getRelativeAngleRad()
+      if a then
+        table.insert(datapoints, {
+          x = v.x,
+          y = v.y,
+          cos = math.cos(a - bearing),
+          sin = math.sin(a - bearing),
+        })
+      end
+    end
+
+    too_few_pois = #datapoints < 2
+
+    local mat_a = {}
+    local mat_b = {}
+
+    for _,v in ipairs(datapoints) do
+      table.insert(mat_a, { v.cos, -v.sin })
+      table.insert(mat_b, { v.cos * v.x + v.sin * v.y })
+    end
+
     local mat_a_transpose = matrix_transpose(mat_a)
 
-    local mat_c = matrix_multiply(mat_a, mat_a_transpose)
+    local mat_c = matrix_multiply(mat_a_transpose, mat_a)
     local mat_c_inv = matrix_inv2x2(mat_c)
     local mat_d = matrix_multiply(mat_c_inv, mat_a_transpose)
     local mat_e = matrix_multiply(mat_d, mat_b)
 
-    -- print(mat_e[1][1], mat_e[2][1])
     position = {
       x = mat_e[1][1],
-      y = mat_e[2][1],
+      y = -mat_e[2][1],
     }
     ::continue::
   end
