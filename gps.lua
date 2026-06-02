@@ -1,118 +1,107 @@
-local function find_peripheral(name, nth)
-  local full_name = string.format("%s_%d", name, nth);
-  return peripheral.find(name, function(candidate_name, _)
-    return candidate_name == full_name
-  end)
-end
+local util = require "util"
+local linalg = require "linalg"
+local pid = require "pid"
 
-local function bad_answer()
-  local n = math.random(7)
-  if n == 1 then
-    io.stdout:write("it was a simple question\n")
-  elseif n == 2 then
-    io.stdout:write("how did you typo that???\n")
-  elseif n == 3 then
-    io.stdout:write("learn to type\n")
-  elseif n == 4 then
-    io.stdout:write("wrong keyboard layout?\n")
-  elseif n == 5 then
-    io.stdout:write("wrong answer!!\n")
-  elseif n == 6 then
-    io.stdout:write("ask someone else to use the computer\n")
-  elseif n == 7 then
-    io.stdout:write("have you tried turning it off and on again?\n")
-  end
-end
+local sc_idx = {
+  left_back = 1,
+  left_mid = 2,
+  left_front = 3,
+  right_back = 4,
+  right_mid = 5,
+  right_front = 6,
+}
 
-local function ask_bool(msg)
-  while true do
-    io.stdout:write(msg)
-    io.stdout:write(" (y/N/q)\n> ")
-    io.stdout:flush()
-    local answer = read()
-    if answer == "" or answer == "n" or answer == "N" then
-      return false
-    elseif answer == "y" or answer == "Y" then
-      return true
-    elseif answer == "q" then
-      return nil
-    end
-    bad_answer()
-  end
-end
+local config_path = "flight-controller.data"
+local config = util.read_data(config_path) or {
+  destinations = {},
+  pois = {},
+  compass = nil,
+  monitor = nil,
+  gimbal = nil,
+  speed_controllers = {},
+  tilt_controller = nil,
 
-local function ask_number(msg, min, max)
-  while true do
-    io.stdout:write(msg)
-    io.stdout:write(" (number/q)\n> ")
-    io.stdout:flush()
-    local answer = read()
-    if answer == "q" then return nil end
-    local number = tonumber(answer)
-    if number and (not min or number >= min) and (not max or number <= max) then
-      return number
-    end
-    bad_answer()
-  end
-end
+  pid_pitch = {
+    p = 0.0,
+    i = 0.0,
+    d = 0.0,
+    i_init = 0.0,
+    i_min = 0.0,
+    i_max = 0.0,
+  },
+  pid_roll = {
+    p = 0.0,
+    i = 0.0,
+    d = 0.0,
+    i_init = 0.0,
+    i_min = 0.0,
+    i_max = 0.0,
+  },
+  base = 0,
+}
 
-local function unwrap(saved)
-  if not saved then saved = {} end
-  if not saved.destinations then saved.destinations = {} end
-  if not saved.pois then saved.pois = {} end
-  if not saved.compass then saved.compass = 0 end
-  return saved.destinations, saved.pois, saved.compass
-end
-
-local function wrap(destinations, pois, compass)
-  return {
-    destinations = destinations,
-    pois = pois,
-    compass = compass,
+local function build_caches()
+  local cache = {
+    pois = {},
+    compass = nil,
+    monitor = nil,
+    gimbal = nil,
+    speed_controllers = {},
+    tilt_controller = nil,
   }
-end
-
-local function readData()
-  local destinations = fs.open("gps.data", "r")
-  if not destinations then return unwrap({}) end
-  local str = destinations.readAll()
-  destinations.close()
-  return unwrap(textutils.unserialize(str))
-end
-
-local function writeData(destinations, pois, compass)
-  local wrapped = wrap(destinations, pois, compass)
-  local destinations = fs.open("gps.data", "w")
-  destinations.write(textutils.serialize(wrapped, { compact = true, allow_repetitions = true }))
-  destinations.close()
-end
-
-local function cache_nav_tables(pois)
-  local cache = {}
-  for k,v in pairs(pois) do
-    table.insert(cache, {
-      nav = find_peripheral("navigation_table", k),
+  for k,v in pairs(config.pois) do
+    table.insert(cache.pois, {
+      nav = util.find_peripheral("navigation_table", k),
       x = v.x,
       y = v.y,
     })
+  end
+  if config.compass then
+    cache.compass = util.find_peripheral("navigation_table", config.compass)
+  end
+  if config.monitor then
+    cache.monitor = util.find_peripheral("monitor", config.monitor)
+  end
+  if config.gimbal then
+    cache.gimbal = util.find_peripheral("gimbal_sensor", config.gimbal)
+  end
+  for i,v in ipairs(config.speed_controllers) do
+    local mult = 1.0
+    if v.flip then mult = -1.0 end
+    cache.speed_controllers[i] = {
+      controller = util.find_peripheral("Create_RotationSpeedController", v.id),
+      mult = mult,
+    }
+  end
+  for i=1,6 do
+    if not cache.speed_controllers[i] then
+      cache.speed_controllers = nil
+      break
+    end
+  end
+  if config.tilt_controller then
+    cache.tilt_controller = util.find_peripheral("restone_relay", config.tilt_controller)
   end
   return cache
 end
 
 local position = nil
 local target = nil
-local destinations, pois, compass = readData()
-local nav_tables = cache_nav_tables(pois)
-local nav_table_compass = find_peripheral("navigation_table", compass)
+local cache = build_caches()
 local too_few_pois = true
 
+local function set_speed_controller(idx, speed)
+  local c = cache.speed_controllers[idx]
+  c.controller.setTargetSpeed(util.clamp(-70, speed * c.mult, 70))
+end
+
 local function pick_saved_destination()
-  if #destinations == 0 then
+  if #config.destinations == 0 then
     return nil
   end
 
-  for i = 1, #destinations do
-    local dst = destinations[i]
+  for i = 1, #config.destinations do
+    local dst = config.destinations[i]
     io.stdout:write(string.format(
       "%d: %s (x:%d, y:%d)\n",
       i, dst.name, dst.x, dst.y
@@ -120,12 +109,12 @@ local function pick_saved_destination()
     io.stdout:flush()
   end
 
-  return ask_number("choice", 1, #destinations)
+  return util.ask_number("choice", 1, #config.destinations)
 end
 
 local function pick_poi()
   local count = 0
-  for k, v in pairs(pois) do
+  for k, v in pairs(config.pois) do
     count = count + 1
     io.stdout:write(string.format(
       "%d: (x:%d, y:%d)\n",
@@ -137,12 +126,12 @@ local function pick_poi()
   if count == 0 then return nil end
 
   while true do
-    local idx = ask_number("choice", nil, nil)
+    local idx = util.ask_number("choice", nil, nil)
     if not idx then return nil end
-    if pois[idx] then
+    if config.pois[idx] then
       return idx
     end
-    bad_answer()
+    util.bad_answer()
   end
 end
 
@@ -154,7 +143,7 @@ local function select_saved_destination()
     return
   end
 
-  local dst = destinations[idx]
+  local dst = config.destinations[idx]
   local x = dst.x
   local y = dst.y
   local name = dst.name
@@ -168,11 +157,11 @@ local function select_adhoc_destination()
   print("select ad-hoc destination")
 
   local name = "ad-hoc"
-  local save = ask_bool("save?")
+  local save = util.ask_bool("save?")
   if not save then return end
-  local x = ask_number("X", nil, nil)
+  local x = util.ask_number("X", nil, nil)
   if not x then return end
-  local y = ask_number("Y", nil, nil)
+  local y = util.ask_number("Y", nil, nil)
   if not y then return end
 
   if save then
@@ -186,12 +175,12 @@ local function select_adhoc_destination()
   target = { x = x, y = y }
 
   if save then
-    table.insert(destinations, {
+    table.insert(config.destinations, {
       x = x,
       y = y,
       name = name,
     })
-    writeData(destinations, pois, compass)
+    util.write_data(config_path, config)
   end
 end
 
@@ -203,7 +192,7 @@ local function remove_saved_destination()
     return
   end
 
-  local dst = destinations[idx]
+  local dst = config.destinations[idx]
   local x = dst.x
   local y = dst.y
   local name = dst.name
@@ -211,11 +200,11 @@ local function remove_saved_destination()
   io.stdout:write(string.format("removing destination %d,%d (%s)\n", x, y, name))
   io.stdout:flush()
 
-  local save = ask_bool("confirm?")
+  local save = util.ask_bool("confirm?")
   if not save then return end
 
-  table.remove(destinations, idx)
-  writeData(destinations, pois, compass)
+  table.remove(config.destinations, idx)
+  util.write_data(config_path, config)
 
   io.stdout:write(string.format("%s removed\n", name))
   io.stdout:flush()
@@ -224,16 +213,16 @@ end
 local function create_poi()
   print("create POI")
 
-  local id = ask_number("nav table id", 0, nil)
+  local id = util.ask_number("nav table id", 0, nil)
   if not id then return end
-  local x = ask_number("X", nil, nil)
+  local x = util.ask_number("X", nil, nil)
   if not x then return end
-  local y = ask_number("Y", nil, nil)
+  local y = util.ask_number("Y", nil, nil)
   if not y then return end
 
-  pois[id] = { x = x, y = y }
-  nav_tables = cache_nav_tables(pois)
-  writeData(destinations, pois, compass)
+  config.pois[id] = { x = x, y = y }
+  cache = build_caches()
+  util.write_data(config_path, config)
 end
 
 local function remove_poi()
@@ -244,20 +233,127 @@ local function remove_poi()
     return;
   end
 
-  pois[id] = nil
-  nav_tables = cache_nav_tables(pois)
-  writeData(destinations, pois, compass)
+  config.pois[id] = nil
+  cache = build_caches()
+  util.write_data(config_path, config)
 end
 
 local function set_compass()
   print("set compass nav table")
 
-  local id = ask_number("nav table id", 0, nil)
+  local id = util.ask_number("nav table id", 0, nil)
   if not id then return end
 
-  compass = id
-  nav_table_compass = find_peripheral("navigation_table", compass)
-  writeData(destinations, pois, compass)
+  config.compass = id
+  cache = build_caches()
+  util.write_data(config_path, config)
+end
+
+local function set_monitor()
+  print("set monitor")
+
+  local id = util.ask_number("monitor id", 0, nil)
+  if not id then return end
+
+  config.monitor = id
+  cache = build_caches()
+  util.write_data(config_path, config)
+end
+
+local function set_gimbal()
+  print("set gimbal")
+
+  local id = util.ask_number("gimbal id", 0, nil)
+  if not id then return end
+
+  config.gimbal = id
+  cache = build_caches()
+  util.write_data(config_path, config)
+end
+
+local function set_propeller_speed_controller()
+  print("set propeller speed controller")
+
+  io.stdout:write("select speed controller:\n")
+  io.stdout:write("1: left back\n")
+  io.stdout:write("2: left mid\n")
+  io.stdout:write("3: left front\n")
+  io.stdout:write("4: right back\n")
+  io.stdout:write("5: right mid\n")
+  io.stdout:write("6: right front\n")
+  io.stdout:flush()
+
+  local idx = util.ask_number("select speed controller", 1, 6)
+  if not idx then return end
+
+  local id = util.ask_number("speed controller id", nil, nil)
+  if not id then return end
+
+  local flip = util.ask_bool("flip")
+  if not (flip ~= nil) then return end
+
+  config.speed_controllers[idx] = {
+    id = id,
+    flip = flip,
+  }
+  cache = build_caches()
+  util.write_data(config_path, config)
+end
+
+local function set_propeller_tilt_controller()
+  print("set propeller tilt controller")
+
+  local id = util.ask_number("redstone relay id", nil, nil)
+  if not id then return end
+
+  config.tilt_controller = id
+  cache = build_caches()
+  util.write_data(config_path, config)
+end
+
+local function configure_pid()
+  print("configure pid")
+
+  io.stdout:write("1: altitude\n")
+  io.stdout:write("2: pitch\n")
+  io.stdout:write("3: roll\n")
+  io.stdout:flush()
+
+  local idx = util.ask_number("select PID", 1, 3)
+  if not idx then return end
+
+  if idx == 1 then
+    local base = util.ask_number("base", -128, 128)
+    if not base then return end
+    config.base = base
+    util.write_data(config_path, config)
+  else
+    local pid = config.pid_pitch
+    if idx == 3 then pid = config.pid_roll end
+
+    io.stdout:write(string.format("1: proportional constant (%f)\n", pid.p))
+    io.stdout:write(string.format("2: integral constant (%f)\n", pid.i))
+    io.stdout:write(string.format("3: derivative constant (%f)\n", pid.d))
+    io.stdout:write(string.format("4: integral init (%f)\n", pid.i_init))
+    io.stdout:write(string.format("5: integral min (%f)\n", pid.i_min))
+    io.stdout:write(string.format("6: integral max (%f)\n", pid.i_max))
+    io.stdout:flush()
+
+    local const_idx = util.ask_number("select constant", 1, 6)
+    if not const_idx then return end
+
+    local const = util.ask_number("select value", nil, nil)
+    if not const then return end
+
+    if const_idx == 1 then pid.p = const
+    elseif const_idx == 2 then pid.i = const
+    elseif const_idx == 3 then pid.d = const
+    elseif const_idx == 4 then pid.i_init = const
+    elseif const_idx == 5 then pid.i_min = const
+    elseif const_idx == 6 then pid.i_max = const
+    end
+    util.write_data(config_path, config)
+  end
 end
 
 local function interactive()
@@ -289,7 +385,13 @@ local function interactive()
     io.stdout:write("3: remove saved destination\n")
     io.stdout:write("4: create POI\n")
     io.stdout:write("5: remove POI\n")
-    io.stdout:write("6: set compass\n> ")
+    io.stdout:write("6: set compass\n")
+    io.stdout:write("7: set monitor\n")
+    io.stdout:write("8: set gimbal\n")
+    io.stdout:write("9: set propeller speed controller\n")
+    io.stdout:write("0: set propeller tilt controller\n")
+    io.stdout:write("-: configure PID\n")
+    io.stdout:write("> ")
     io.stdout:flush()
 
     local handlers = {
@@ -299,78 +401,122 @@ local function interactive()
       ["4"] = create_poi,
       ["5"] = remove_poi,
       ["6"] = set_compass,
+      ["7"] = set_monitor,
+      ["8"] = set_gimbal,
+      ["9"] = set_propeller_speed_controller,
+      ["0"] = set_propeller_tilt_controller,
+      ["-"] = configure_pid,
     }
 
     local handler = handlers[read()]
     if handler then
       handler()
     else
-      bad_answer()
+      util.bad_answer()
     end
   end
 end
 
-local function matrix_transpose(matrix)
-  local src_h = #matrix
-  local src_w = #matrix[1]
-
-  local result = {}
-
-  for i=1,src_w do
-    result[i] = {}
-    for j=1,src_h do
-      result[i][j] = matrix[j][i]
-    end
-  end
-
-  return result
-end
-
-local function matrix_multiply(a, b)
-  local a_h = #a
-  local a_w = #a[1]
-  local b_h = #b
-  local b_w = #b[1]
-  assert(a_w == b_h, "matrix multiplication size mismatch")
-
-  local result = {}
-
-  for j=1,a_h do
-    result[j] = {}
-    for i=1,b_w do
-      local sum = 0.0
-      for k=1,a_w do
-        sum = sum + a[j][k] * b[k][i]
-      end
-      result[j][i] = sum
-    end
-  end
-
-  return result
-end
-
-local function matrix_inv2x2(matrix)
-  local h = #matrix
-  local w = #matrix[1]
-  assert(h == 2)
-  assert(w == 2)
-
-  local c = 1.0 / (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
-  return {
-    { c * matrix[2][2], -c * matrix[1][2] },
-    { -c * matrix[2][1], c * matrix[1][1] },
+local function flight_controller()
+  local pid_pitch = {
+    accumulator = config.pid_pitch.i_init,
+    prev_error = 0.0,
   }
+  local pid_roll = {
+    accumulator = config.pid_roll.i_init,
+    prev_error = 0.0,
+  }
+  local dt = 0.05
+
+  while true do
+    sleep(dt)
+
+    if not cache.gimbal then print("no gimbal"); goto continue end
+
+    local gimbal = cache.gimbal.getAnglesRad()
+    local error_pitch = gimbal[2]
+    local error_roll = gimbal[1]
+
+    if target and position and cache.compass then
+      local north = -cache.compass.getRelativeAngleRad()
+
+      local dx = target.x - position.x
+      local dy = target.y - position.y
+
+      local slow_distance = 100
+      local angle_limit = 0.174 -- 10°
+      local mul = 1.0 / slow_distance * angle_limit
+
+      local x_adjustment = util.clamp(-slow_distance, dx, slow_distance) * mul
+      local y_adjustment = util.clamp(-slow_distance, dy, slow_distance) * mul
+
+      -- print("distance", math.sqrt(dx * dx + dy * dy))
+      -- print("position.x", position.x)
+      -- print("position.y", position.y)
+      -- print("x_adjustment", x_adjustment)
+      -- print("y_adjustment", y_adjustment)
+      -- print("north", north)
+
+      error_pitch = error_pitch - math.sin(north) * x_adjustment + math.cos(north) * y_adjustment
+      error_roll = error_roll - math.cos(north) * x_adjustment - math.sin(north) * y_adjustment
+    end
+
+    local corr_pitch = pid.pid_contoller(
+      pid_pitch,
+      config.pid_pitch,
+      error_pitch * 20.0,
+      dt,
+      "y"
+    ) * 0.1
+    local corr_roll = pid.pid_contoller(
+      pid_roll,
+      config.pid_roll,
+      error_roll * 20.0,
+      dt,
+      "x"
+    ) * 0.1
+
+    if cache.speed_controllers and config.base then
+      set_speed_controller(sc_idx.left_mid, config.base)
+      set_speed_controller(sc_idx.right_mid, config.base)
+
+      set_speed_controller(sc_idx.left_front,  config.base * math.exp(0.0 - corr_roll + corr_pitch))
+      set_speed_controller(sc_idx.left_back,   config.base * math.exp(0.0 - corr_roll - corr_pitch))
+      set_speed_controller(sc_idx.right_front, config.base * math.exp(0.0 + corr_roll + corr_pitch))
+      set_speed_controller(sc_idx.right_back,  config.base * math.exp(0.0 + corr_roll - corr_pitch))
+    end
+
+    if cache.monitor then
+      cache.monitor.clear()
+      cache.monitor.setCursorPos(1,1)
+      cache.monitor.write(string.format("pitch: %f a: %f", corr_pitch, error_pitch))
+      cache.monitor.setCursorPos(1,2)
+      cache.monitor.write(string.format("roll: %f a: %f", corr_roll, error_roll))
+      if target then
+        cache.monitor.setCursorPos(1,3)
+        cache.monitor.write(string.format("target: %d,%d", target.x, target.y))
+      end
+      if position then
+        cache.monitor.setCursorPos(1,4)
+        cache.monitor.write(string.format("position: %d,%d", position.x, position.y))
+      end
+      pid.visualize_pid(cache.monitor)
+    end
+
+    ::continue::
+  end
 end
 
-local function background()
+local function gps()
   while true do
-    sleep(0.5)
-    if not nav_table_compass then goto continue end
-
-    local bearing = nav_table_compass.getRelativeAngleRad()
+    sleep(0.1)
+    
+    if not cache.compass then goto continue end
+    local bearing = cache.compass.getRelativeAngleRad()
+    if not bearing then goto continue end
 
     local datapoints = {}
-    for _,v in ipairs(nav_tables) do
+    for _,v in ipairs(cache.pois) do
       local a = v.nav.getRelativeAngleRad()
       if a then
         table.insert(datapoints, {
@@ -392,12 +538,11 @@ local function background()
       table.insert(mat_b, { v.cos * v.x + v.sin * v.y })
     end
 
-    local mat_a_transpose = matrix_transpose(mat_a)
-
-    local mat_c = matrix_multiply(mat_a_transpose, mat_a)
-    local mat_c_inv = matrix_inv2x2(mat_c)
-    local mat_d = matrix_multiply(mat_c_inv, mat_a_transpose)
-    local mat_e = matrix_multiply(mat_d, mat_b)
+    local mat_a_transpose = linalg.matrix_transpose(mat_a)
+    local mat_c = linalg.matrix_multiply(mat_a_transpose, mat_a)
+    local mat_c_inv = linalg.matrix_inv2x2(mat_c)
+    local mat_d = linalg.matrix_multiply(mat_c_inv, mat_a_transpose)
+    local mat_e = linalg.matrix_multiply(mat_d, mat_b)
 
     position = {
       x = mat_e[1][1],
@@ -407,4 +552,4 @@ local function background()
   end
 end
 
-parallel.waitForAny(interactive, background)
+parallel.waitForAny(interactive, gps, flight_controller)
