@@ -47,6 +47,7 @@ local function repair_config_misc(misc)
     near_strafe_angle_limit = 0.174, -- 10°
     autopilot_max_boost_bearing_error = 0.1,
     autopilot_boost_angle = 0.1,
+    yaw_deadzone = 0.1,
   }
   for k,v in pairs(init) do
     if not misc[k] then
@@ -996,8 +997,8 @@ local function flight_controller()
       set_speed_controller(sc_idx.right_back,  config.base * math.exp(0.0 + corr_roll - corr_pitch))
     end
     if cache.tilt_controller then
-      local turn_left = corr_yaw <= -0.05
-      local turn_right = corr_yaw >= 0.05
+      local turn_left = corr_yaw <= -config.misc.yaw_deadzone
+      local turn_right = corr_yaw >= config.misc.yaw_deadzone
       if turn_left or turn_right or not boost then
         cache.tilt_controller.setOutput("front", turn_right);
         cache.tilt_controller.setOutput("right", turn_left);
