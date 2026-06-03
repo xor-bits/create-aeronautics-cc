@@ -212,28 +212,50 @@ local function interactive_menu(monitor, term_w, term_h, menu)
 end
 
 local function interactive_autopilot_target_menu(monitor, term_w, term_h, menu)
-  if not position or too_few_pois then
-    monitor.write("POSITION INACCURATE")
-    local _, key, is_held = os.pullEvent("key")
-    if key == keys.left then return menu.prev end
-    return
+  local enabled = false
+  if target then
+    enabled = menu.x == target.x and menu.y == target.y
   end
-  target = { x = menu.x, y = menu.y }
-  local dx = target.x - position.x
-  local dy = target.y - position.y
 
-  monitor.write(("current  x:%d  y:%d"):format(position.x, position.y))
-  monitor.setCursorPos(1, 4)
-  monitor.write(("target   x:%d  y:%d"):format(target.x, target.y))
-  monitor.setCursorPos(1, 5)
-  monitor.write(("delta    x:%d  y:%d"):format(dx, dy))
-  monitor.setCursorPos(1, 6)
-  monitor.write(("distance d:%.2f"):format(math.sqrt(dx * dx + dy * dy)))
+  monitor.setCursorPos(1, 3)
+  interactive_menu_selection(monitor, true, "enabled")
+  monitor.write(("  (%s)"):format(enabled))
+
+  if not position or too_few_pois then
+    monitor.setCursorPos(1, 4)
+    monitor.write("POSITION INACCURATE")
+  elseif target then
+    local dx = target.x - position.x
+    local dy = target.y - position.y
+    local d = math.sqrt(dx * dx + dy * dy)
+
+    monitor.setCursorPos(1, 4)
+    monitor.write(("current  x:%d  y:%d"):format(position.x, position.y))
+    monitor.setCursorPos(1, 5)
+    monitor.write(("target   x:%d  y:%d"):format(target.x, target.y))
+    if not enabled then
+      monitor.write(" ANOTHER TARGET")
+    end
+    monitor.setCursorPos(1, 6)
+    monitor.write(("delta    x:%d  y:%d"):format(dx, dy))
+    monitor.setCursorPos(1, 7)
+    monitor.write(("distance d:%.2f"):format(d))
+    if d <= config.misc.near_distance then
+      monitor.write(" mode:near")
+    else
+      monitor.write(" mode:far")
+    end
+  end
 
   local _, key, is_held = os.pullEvent("key")
   if key == keys.left then
-    target = nil
-    return menu.prev or menu
+    return menu.prev
+  elseif key == keys.right or key == keys.enter then
+    if enabled then
+      target = nil
+    else
+      target = { x = menu.x, y = menu.y }
+    end
   end
 end
 
