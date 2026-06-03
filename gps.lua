@@ -41,6 +41,20 @@ local function repair_config_pid(pid)
   if not pid.base_error then pid.base_error = 0.0 end
 end
 
+local function repair_config_misc(misc)
+  local init = {
+    near_distance = 200.0,
+    near_strafe_angle_limit = 0.174, -- 10°
+    autopilot_max_boost_bearing_error = 0.1,
+    autopilot_boost_angle = 0.1,
+  }
+  for k,v in pairs(init) do
+    if not misc[k] then
+      misc[k] = v
+    end
+  end
+end
+
 local function repair_config()
   if not config.destinations then config.destinations = {} end
   if not config.pois then config.pois = {} end
@@ -49,9 +63,11 @@ local function repair_config()
   if not config.pid_roll then config.pid_roll = { table.unpack(default_pid) } end
   if not config.pid_yaw then config.pid_yaw = { table.unpack(default_pid) } end
   if not config.base then config.base = 0 end
+  if not config.misc then config.misc = {} end
   repair_config_pid(config.pid_pitch)
   repair_config_pid(config.pid_roll)
   repair_config_pid(config.pid_yaw)
+  repair_config_misc(config.misc)
   util.write_data(config_path, config)
 end
 repair_config()
@@ -646,6 +662,43 @@ local function interactive_config_tilt_controller(monitor, term_w, term_h, menu)
   end
 end
 
+local function interactive_config_misc_menu(monitor, term_w, term_h, menu)
+  local sorted_misc = {}
+  for k,v in pairs(config.misc) do
+    table.insert(sorted_misc, {
+      k = k,
+      v = v,
+    })
+  end
+  table.sort(sorted_misc, function(a, b)
+    return a.k < b.k
+  end)
+
+  for i,v in ipairs(sorted_misc) do
+    monitor.setCursorPos(1, 2 + i)
+    interactive_menu_selection(monitor, i == menu.selection, v.k)
+    monitor.write(("  (%s)"):format(textutils.serialize(v.v)))
+  end
+
+  local _, key, is_held = os.pullEvent("key")
+  if key == keys.down then
+    menu.selection = (menu.selection % #sorted_misc) + 1
+  elseif key == keys.up then
+    menu.selection = ((menu.selection - 2) % #sorted_misc) + 1
+  elseif key == keys.left then
+    return menu.prev
+  elseif key == keys.right or key == keys.enter then
+    os.pullEvent("key_up")
+
+    local msg = "new value for "..sorted_misc[menu.selection].k.."?"
+    local new_val = util.ask_number(monitor, term_h - 1, msg)
+    if not new_val then return end
+
+    config.misc[sorted_misc[menu.selection].k] = new_val
+    util.write_data(config_path, config)
+  end
+end
+
 local function interactive_debug_menu(monitor, term_w, term_h, menu)
   if menu.history then
     monitor.setCursorPos(1, 3)
@@ -753,6 +806,12 @@ local function interactive()
     custom = interactive_config_tilt_controller,
   }
 
+  local menu_config_misc = {
+    name = "Misc",
+    selection = 1,
+    custom = interactive_config_misc_menu,
+  }
+
   local menu_config = {
     name = "Config",
     selection = 1,
@@ -766,6 +825,7 @@ local function interactive()
       menu_config_linked_typewriter,
       menu_config_propeller_speed_controllers,
       menu_config_propeller_tilt_controller,
+      menu_config_misc,
     },
   }
 
@@ -844,17 +904,15 @@ local function flight_controller()
     if target and position and cache.compass then
       local dx = target.x - position.x
       local dy = target.y - position.y
-      local slow_distance = 200
 
-      near = dx * dx + dy * dy <= slow_distance * slow_distance
+      near = dx * dx + dy * dy <= config.misc.near_distance * config.misc.near_distance
       if near then
         -- point towards the set bearing when close to the target
         -- fine tune position with pitch and roll
-        local angle_limit = 0.174 -- 10°
-        local mul = 1.0 / slow_distance * angle_limit
+        local mul = 1.0 / config.misc.near_distance * config.misc.near_strafe_angle_limit
 
-        local x_adjustment = util.clamp(-slow_distance, dx, slow_distance) * mul
-        local y_adjustment = util.clamp(-slow_distance, dy, slow_distance) * mul
+        local x_adjustment = util.clamp(-config.misc.near_distance, dx, config.misc.near_distance) * mul
+        local y_adjustment = util.clamp(-config.misc.near_distance, dy, config.misc.near_distance) * mul
         error_pitch = error_pitch + math.sin(north) * x_adjustment + math.cos(north) * y_adjustment
         error_roll = error_roll - math.cos(north) * x_adjustment + math.sin(north) * y_adjustment
       else
@@ -867,8 +925,8 @@ local function flight_controller()
     if cache.compass then
       north = cache.compass.getRelativeAngleRad()
       error_yaw = error_yaw + ((north - bearing + math.pi) % (math.pi * 2.0)) - math.pi
-      if math.abs(error_yaw) <= 0.1 and not near then
-        error_pitch = error_pitch - 0.1
+      if math.abs(error_yaw) <= config.misc.autopilot_max_boost_bearing_error and not near then
+        error_pitch = error_pitch - config.misc.autopilot_boost_angle
         boost = true
       end
     end
