@@ -1,3 +1,5 @@
+local completion = require "cc.completion"
+
 local util = {}
 
 function util.find_peripheral(name, nth)
@@ -14,51 +16,113 @@ end
 function util.bad_answer()
   local n = math.random(7)
   if n == 1 then
-    io.stdout:write("it was a simple question\n")
+    return "it was a simple question"
   elseif n == 2 then
-    io.stdout:write("how did you typo that???\n")
+    return "how did you typo that???"
   elseif n == 3 then
-    io.stdout:write("learn to type\n")
+    return "learn to type"
   elseif n == 4 then
-    io.stdout:write("wrong keyboard layout?\n")
+    return "wrong keyboard layout?"
   elseif n == 5 then
-    io.stdout:write("wrong answer!!\n")
+    return "wrong answer!!"
   elseif n == 6 then
-    io.stdout:write("ask someone else to use the computer\n")
+    return "ask someone else to use the computer"
   elseif n == 7 then
-    io.stdout:write("have you tried turning it off and on again?\n")
+    return "have you tried turning it off and on again?"
   end
 end
 
-function util.ask_bool(msg)
+function util.ask_bool(monitor, y, msg)
+  local choice = util.ask_choice(monitor, y, msg, { "y", "n" }, true)
+  if not choice then return nil end
+
+  if choice == "n" then
+    return false
+  else
+    assert(choice == "y")
+    return true
+  end
+end
+
+function util.ask_text(monitor, y, msg)
+  monitor.setCursorPos(1, y)
+  monitor.clearLine()
+  monitor.write(msg)
+  monitor.write(" (text/q)")
+  monitor.setCursorPos(1, y + 1)
+  monitor.clearLine()
+  monitor.write("> ")
+
+  local answer = read()
+  if answer == "q" then return nil end
+  return answer
+end
+
+function util.ask_number(monitor, y, msg, min, max)
+  local first_try = true
   while true do
-    io.stdout:write(msg)
-    io.stdout:write(" (y/N/q)\n> ")
-    io.stdout:flush()
-    local answer = read()
-    if answer == "" or answer == "n" or answer == "N" then
-      return false
-    elseif answer == "y" or answer == "Y" then
-      return true
-    elseif answer == "q" then
-      return nil
+    monitor.setCursorPos(1, y)
+    monitor.clearLine()
+    monitor.write(msg)
+    local min_text = min or "-inf"
+    local max_text = max or "inf"
+    monitor.write((" (%s..%s/q)"):format(min_text, max_text))
+    monitor.setCursorPos(1, y + 1)
+    monitor.clearLine()
+    if not first_try then
+      monitor.write(util.bad_answer())
+      monitor.write("  ")
     end
-    util.bad_answer()
-  end
-end
+    monitor.write("> ")
 
-function util.ask_number(msg, min, max)
-  while true do
-    io.stdout:write(msg)
-    io.stdout:write(" (number/q)\n> ")
-    io.stdout:flush()
+    first_try = false
     local answer = read()
     if answer == "q" then return nil end
     local number = tonumber(answer)
     if number and (not min or number >= min) and (not max or number <= max) then
       return number
     end
-    util.bad_answer()
+  end
+end
+
+function util.ask_choice(monitor, y, msg, choices, default)
+  local first_try = true
+  while true do
+    monitor.setCursorPos(1, y)
+    monitor.clearLine()
+    monitor.write(msg)
+    monitor.write(" (")
+    for i=1,(#choices - 1) do
+      monitor.write(choices[i])
+      monitor.write("/")
+    end
+    if default then
+      monitor.write(string.upper(choices[#choices]))
+    else
+      monitor.write(choices[#choices])
+    end
+    monitor.write("/")
+    monitor.write("q)")
+    monitor.setCursorPos(1, y + 1)
+    monitor.clearLine()
+    if not first_try then
+      monitor.write(util.bad_answer())
+      monitor.write("  ")
+    end
+    monitor.write("> ")
+
+    first_try = false
+    local answer = string.lower(read(nil, nil, function(text)
+      return completion.choice(text, choices)
+    end))
+
+    if default and answer == "" then return choices[#choices] end
+    if answer == "q" then return nil end
+    for _,v in ipairs(choices) do
+      if answer == v then
+        return answer
+      end
+    end
   end
 end
 

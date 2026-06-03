@@ -2,8 +2,23 @@ local util = require "util"
 
 local pid = {}
 
-local visualizer = {}
-function pid.pid_contoller(instance, config, error, delta_seconds, visualize)
+local visualizer = {
+  ["x"] = {
+    e = 0.0,
+    p = 0.0,
+    i = 0.0,
+    d = 0.0,
+    s = 0.0,
+  },
+  ["y"] = {
+    e = 0.0,
+    p = 0.0,
+    i = 0.0,
+    d = 0.0,
+    s = 0.0,
+  },
+}
+function pid.pid_contoller(instance, config, error, delta_seconds)
   if not instance.accumulator then
     instance.accumulator = 0.0
     instance.prev_error = 0.0
@@ -22,14 +37,12 @@ function pid.pid_contoller(instance, config, error, delta_seconds, visualize)
 
   local sum = proportional + derivative + integral
 
-
-  if visualize then
-    visualizer[visualize] = {}
-    visualizer[visualize].e = error
-    visualizer[visualize].p = proportional
-    visualizer[visualize].i = integral
-    visualizer[visualize].d = derivative
-    visualizer[visualize].s = sum
+  if config.visualize then
+    visualizer[config.visualize].e = error
+    visualizer[config.visualize].p = proportional
+    visualizer[config.visualize].i = integral
+    visualizer[config.visualize].d = derivative
+    visualizer[config.visualize].s = sum
   end
 
   return sum
@@ -53,8 +66,12 @@ function pid.visualize_pid(monitor)
   local monitor_third_x              = math.floor(monitor_w / 3)
   local monitor_third_y              = math.floor(monitor_h / 3)
 
-  if not visualizer["x"] then return end
-  if not visualizer["y"] then return end
+  monitor.setCursorPos(1, 5)
+  monitor.write(("x_err:%.3f y_err:%.3f"):format(visualizer["x"].e, visualizer["y"].e))
+  monitor.setCursorPos(1, 6)
+  monitor.write(("x_iacc:%.3f y_iacc:%.3f"):format(visualizer["x"].i, visualizer["y"].i))
+  monitor.setCursorPos(1, 7)
+  monitor.write(("x_corr:%.3f y_corr:%.3f"):format(visualizer["x"].s, visualizer["y"].s))
 
   pid.visualize_joystick(
     monitor,
