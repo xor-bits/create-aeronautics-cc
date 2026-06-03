@@ -246,6 +246,9 @@ local function interactive_autopilot_target_menu(monitor, term_w, term_h, menu)
     else
       monitor.write(" mode:far")
     end
+  else
+    monitor.setCursorPos(1, 5)
+    monitor.write(("target   x:%d  y:%d"):format(menu.x, menu.y))
   end
 
   local _, key, is_held = os.pullEvent("key")
@@ -267,7 +270,59 @@ local function interactive_autopilot_menu(monitor, term_w, term_h, menu)
     monitor.write(("  (x:%d y:%d)"):format(v.x, v.y))
   end
 
-  local _, key, is_held = os.pullEvent("key")
+  local function add_destination(x, y)
+    local ad_hoc = util.ask_bool(monitor, term_h - 3, "ad-hoc (temporary)?")
+    if not (ad_hoc ~= nil) then return end
+    local name = "ad-hoc"
+    if not ad_hoc then
+      name = util.ask_text(monitor, term_h - 1, "new destination name?")
+      if not name then return end
+    end
+
+    if not ad_hoc then
+      table.insert(config.destinations, {
+        name = name,
+        x = x,
+        y = y,
+      })
+      util.write_data(config_path, config)
+    end
+    return {
+      name = name,
+      prev = menu,
+      custom = interactive_autopilot_target_menu,
+      x = x,
+      y = y,
+    }
+  end
+
+  local key = nil
+  while true do
+    local event = {os.pullEvent()}
+    if event[1] == "key" then
+      key = event[2]
+      break
+    elseif event[1] == "paste" then
+      local _, _, x_str = event[2]:find("x:(-?%d+)")
+      local _, _, z_str = event[2]:find("z:(-?%d+)")
+
+      if not x_str then goto continue end
+      if not z_str then goto continue end
+
+      local x = tonumber(x_str)
+      local z = tonumber(z_str)
+
+      if not x then goto continue end
+      if not z then goto continue end
+
+      monitor.setCursorPos(1, term_h - 4)
+      monitor.write(("x:%d, y:%d"):format(x, z))
+      return add_destination(x, z)
+    end
+
+    ::continue::
+  end
+
   if key == keys.down then
     menu.selection = (menu.selection % #config.destinations) + 1
     return menu
@@ -288,33 +343,12 @@ local function interactive_autopilot_menu(monitor, term_w, term_h, menu)
   elseif key == keys.a then
     os.pullEvent("key_up")
 
-    local ad_hoc = util.ask_bool(monitor, term_h - 7, "ad-hoc (temporary)?")
-    if not (ad_hoc ~= nil) then return end
-    local name = "ad-hoc"
-    if not ad_hoc then
-      name = util.ask_text(monitor, term_h - 5, "new destination name?")
-      if not name then return end
-    end
-    local x = util.ask_number(monitor, term_h - 3, "X?")
+    local x = util.ask_number(monitor, term_h - 7, "X?")
     if not x then return end
-    local y = util.ask_number(monitor, term_h - 1, "Y?")
+    local y = util.ask_number(monitor, term_h - 5, "Y?")
     if not y then return end
 
-    if not ad_hoc then
-      table.insert(config.destinations, {
-        name = name,
-        x = x,
-        y = y,
-      })
-      util.write_data(config_path, config)
-    end
-    return {
-      name = name,
-      prev = menu,
-      custom = interactive_autopilot_target_menu,
-      x = x,
-      y = y,
-    }
+    return add_destination(x, y)
   elseif key == keys.d then
     os.pullEvent("key_up")
 
