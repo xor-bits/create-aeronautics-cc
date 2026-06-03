@@ -251,7 +251,17 @@ local function interactive_autopilot_target_menu(monitor, term_w, term_h, menu)
     monitor.write(("target   x:%d  y:%d"):format(menu.x, menu.y))
   end
 
-  local _, key, is_held = os.pullEvent("key")
+  local key = nil
+
+  parallel.waitForAny(
+    function()
+      sleep(0.5)
+    end,
+    function()
+      _, key, _ = os.pullEvent("key")
+    end
+  )
+
   if key == keys.left then
     return menu.prev
   elseif key == keys.right or key == keys.enter then
