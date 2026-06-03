@@ -287,19 +287,33 @@ local function interactive_autopilot_menu(monitor, term_w, term_h, menu)
   elseif key == keys.a then
     os.pullEvent("key_up")
 
-    local name = util.ask_text(monitor, term_h - 5, "new destination name?")
-    if not name then return end
+    local ad_hoc = util.ask_bool(monitor, term_h - 7, "ad-hoc (temporary)?")
+    if not (ad_hoc ~= nil) then return end
+    local name = "ad-hoc"
+    if not ad_hoc then
+      name = util.ask_text(monitor, term_h - 5, "new destination name?")
+      if not name then return end
+    end
     local x = util.ask_number(monitor, term_h - 3, "X?")
     if not x then return end
     local y = util.ask_number(monitor, term_h - 1, "Y?")
     if not y then return end
 
-    table.insert(config.destinations, {
+    if not ad_hoc then
+      table.insert(config.destinations, {
+        name = name,
+        x = x,
+        y = y,
+      })
+      util.write_data(config_path, config)
+    end
+    return {
       name = name,
+      prev = menu,
+      custom = interactive_autopilot_target_menu,
       x = x,
       y = y,
-    })
-    util.write_data(config_path, config)
+    }
   elseif key == keys.d then
     os.pullEvent("key_up")
 
